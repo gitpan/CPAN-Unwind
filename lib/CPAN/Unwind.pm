@@ -22,7 +22,7 @@ use Cache::FileCache;
 use Cache::Cache;
 use Cwd;
 
-our $VERSION = "0.01";
+our $VERSION = "0.02";
 our $TGZ     = "tar.tgz";
 
 ###########################################
@@ -36,7 +36,6 @@ sub new {
 
     $self->{cache} = Cache::FileCache->new(
                  {namespace           => "cpan_unwind",
-                  default_expires_in  => 3600*24*30,
                  }) unless $self->{cache};
 
     bless $self, $class;
@@ -47,7 +46,9 @@ sub tarball_url {
 ###########################################
     my($self, $mname) = @_;
 
-    my $cpan_url = $CPAN::Config->{urllist}->[0] . "modules/by-authors/id";
+    my $cpan_url   = $CPAN::Config->{urllist}->[0];
+    $cpan_url    ||= "http://search.cpan.org/CPAN";
+    $cpan_url     .= "/modules/by-authors/id";
 
     my ($fh, $filename) = tempfile(CLEANUP => 1);
 
@@ -90,7 +91,7 @@ sub lookup {
 
     my $result = CPAN::Unwind::Response->new(mname => $mname, success => 1);
     $result->{dependency_graph} = Algorithm::Dependency::Source::Mem->new();
-    $result->{dependends}       = {};
+    $result->{dependents}       = {};
 
     while(keys %unresolved) {
 
@@ -104,25 +105,25 @@ sub lookup {
 
         return $resp unless $resp->is_success();
 
-        my $deps = $resp->dependend_versions();
+        my $deps = $resp->dependent_versions();
 
         $result->{dependency_graph}->item_add($mname, keys %$deps);
-        $result->{dependends}->{$mname} = [];
+        $result->{dependents}->{$mname} = [];
 
         for(keys %$deps) {
 
-            push @{$result->{dependends}->{$mname}}, $_;
+            push @{$result->{dependents}->{$mname}}, $_;
 
             $unresolved{$_} = 1 unless exists $resolved{$_};
 
-            if(exists $result->{dependend_versions}->{$_}) {
+            if(exists $result->{dependent_versions}->{$_}) {
                     # Already got that one, only store it if the
                     # required version number is higher
-                if($result->{dependend_versions}->{$_} < $deps->{$_}) {
-                    $result->{dependend_versions}->{$_} = $deps->{$_};
+                if($result->{dependent_versions}->{$_} < $deps->{$_}) {
+                    $result->{dependent_versions}->{$_} = $deps->{$_};
                 }
             } else {
-                $result->{dependend_versions}->{$_} = $deps->{$_};
+                $result->{dependent_versions}->{$_} = $deps->{$_};
             }
         }
     }
@@ -144,7 +145,7 @@ sub lookup_single {
             return CPAN::Unwind::Response->new(
                        mname        => $mname,
                        success      => 1,
-                       dependend_versions => $href);
+                       dependent_versions => $href);
         }
     }
 
@@ -154,7 +155,7 @@ sub lookup_single {
     return CPAN::Unwind::Response->new(
                mname              => $mname,
                success            => 1,
-               dependend_versions => {} ) if $url =~ m#/perl-\d#;
+               dependent_versions => {} ) if $url =~ m#/perl-\d#;
 
     return CPAN::Unwind::Response->new(
                mname              => $mname,
@@ -185,7 +186,7 @@ sub lookup_single {
         $deps = Module::Depends::Intrusive->new()->
                   dist_dir(subdir_find("."))->find_modules()->requires();
 
-        DEBUG "Found dependend_versions of $mname: ", Dumper($deps);
+        DEBUG "Found dependent_versions of $mname: ", Dumper($deps);
     };
 
     chdir $cwd or LOGDIE "Cannot chdir to $cwd";
@@ -202,7 +203,7 @@ sub lookup_single {
     return CPAN::Unwind::Response->new(
                mname              => $mname,
                success            => 1,
-               dependend_versions => $deps);
+               dependent_versions => $deps);
 }
 
 ###########################################
@@ -237,7 +238,7 @@ sub new {
     my $self = {
         is_success   => 0,
         mname        => "",
-        dependend_versions => {},
+        dependent_versions => {},
         message      => "",
         %options,
     };
@@ -254,11 +255,11 @@ sub message { $_[0]->{message} }
 ###########################################
 
 ###########################################
-sub dependend_versions { return $_[0]->{dependend_versions} }
+sub dependent_versions { return $_[0]->{dependent_versions} }
 ###########################################
 
 ###########################################
-sub dependends { return $_[0]->{dependends} }
+sub dependents { return $_[0]->{dependents} }
 ###########################################
 
 ###########################################
@@ -266,9 +267,9 @@ sub missing {
 ###########################################
     my($self) = @_;
 
-    my %missing = map { $_ => $self->{dependend_versions}->{$_} }
+    my %missing = map { $_ => $self->{dependent_versions}->{$_} }
                   grep { ! Log::Log4perl::Util::module_available($_) }
-                       keys %{$self->{dependend_versions}};
+                       keys %{$self->{dependent_versions}};
     return \%missing;
 }
 
@@ -351,7 +352,7 @@ CPAN::Unwind - Recursively determines dependencies of CPAN modules
     my $resp = $agent->lookup("Log::Log4perl");
     die $resp->message() unless $resp->is_success();
     
-    my $deps = $resp->dependend_versions();
+    my $deps = $resp->dependent_versions();
     
     for my $module (keys %$deps) {
         printf "%30s: %s\n", $module, $deps->{$module};
@@ -426,10 +427,10 @@ Returns true if there's a valid response and no error occurred.
 Returns a response's error message in case C<is_success()> returned
 a false value.
 
-=item C<$resp-E<gt>dependend_versions()>
+=item C<$resp-E<gt>dependent_versions()>
 
 Returns a ref to a hash, containing a mapping between names of
-dependend modules and their version numbers: 
+dependent modules and their version numbers: 
 
     { "Test::More"  =>  0.51,
       "List::Utils" =>  0.38,
@@ -438,10 +439,10 @@ dependend modules and their version numbers:
 
 =item C<$resp-E<gt>missing()>
 
-Similar to C<dependend_versions()>, but only modules that are currently
+Similar to C<dependent_versions()>, but only modules that are currently
 I<not> installed are returned.
 
-=item C<$resp-E<gt>dependends()>
+=item C<$resp-E<gt>dependents()>
 
 Returns a ref to a hash, mapping module names to their dependencies.
 
@@ -461,7 +462,33 @@ if no schedule can be made due to circular dependencies.
 
 =back
 
+=head2 Caching
+
+To avoid costly downloads, C<CPAN::Unwind> will cache dependencies
+in a Cache::FileCache cache, where they are stored indefinitely.
+Running it the second time on a module will speed up processing
+significantly.
+
+=head2 Turnkey Scripts
+
+C<CPAN::Unwind> comes with a ready-to-use script C<cpan-unwind>,
+which gets installed in perl's bin path. It is ready to use, just
+call
+
+    $ cpan-unwind Log::Log4perl
+
+to see which modules C<Log::Log4perl> depends on.
+
 C<CPAN::Unwind> requires a valid CPAN configuration.
+
+=head1 EXAMPLES
+
+    $ cpan-unwind Net::Amazon
+    Carp Compress::Zlib Data::Dumper Fcntl File::Basename File::Path 
+    File::Spec HTML::Tagset IO::Socket MIME::Base64 Socket Test::Harness 
+    Test::More Test::Simple Time::HiRes URI XML::NamespaceSupport 
+    Digest::base File::Temp HTML::Parser Log::Log4perl Net::FTP 
+    XML::SAX XML::Simple Digest::MD5 LWP::UserAgent Net::Amazon
 
 =head1 LEGALESE
 
