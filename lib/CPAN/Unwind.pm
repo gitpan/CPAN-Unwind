@@ -9,7 +9,6 @@ package CPAN::Unwind;
 use strict;
 use warnings;
 use CPAN qw();
-use CPAN::Config;
 use File::Temp qw(tempfile tempdir);
 use Log::Log4perl qw(:easy);
 use Log::Log4perl::Util;
@@ -22,7 +21,7 @@ use Cache::FileCache;
 use Cache::Cache;
 use Cwd;
 
-our $VERSION = "0.02";
+our $VERSION = "0.03";
 our $TGZ     = "tar.tgz";
 
 ###########################################
@@ -31,12 +30,19 @@ sub new {
     my($class, %options) = @_;
 
     my $self = {
+        add          => [],
+        core_include => 0,
         %options,
     };
 
-    $self->{cache} = Cache::FileCache->new(
-                 {namespace           => "cpan_unwind",
-                 }) unless $self->{cache};
+    if(exists $options{cache}) {
+        $options{cache} = CPAN::Unwind::Pseudocache->new() 
+          unless $options{cache};
+    } else {
+        $self->{cache} = Cache::FileCache->new(
+                     {namespace           => "cpan_unwind",
+                     });
+    }
 
     bless $self, $class;
 }
@@ -46,7 +52,13 @@ sub tarball_url {
 ###########################################
     my($self, $mname) = @_;
 
-    my $cpan_url   = $CPAN::Config->{urllist}->[0];
+    my $cpan_url;
+
+    eval {
+        require CPAN::Config;
+        $cpan_url   = $CPAN::Config->{urllist}->[0];
+    };
+
     $cpan_url    ||= "http://search.cpan.org/CPAN";
     $cpan_url     .= "/modules/by-authors/id";
 
@@ -84,12 +96,14 @@ sub tarball_url {
 ###########################################
 sub lookup {
 ###########################################
-    my($self, $mname) = @_;
+    my($self, @mnames) = @_;
 
-    my %unresolved = ($mname => 1);
+    my %unresolved = map { ($_ => 1) } @mnames;
     my %resolved   = ();
+    my @in_core    = ();
 
-    my $result = CPAN::Unwind::Response->new(mname => $mname, success => 1);
+    my $result = CPAN::Unwind::Response->new(mname   => [@mnames],
+                                             success => 1);
     $result->{dependency_graph} = Algorithm::Dependency::Source::Mem->new();
     $result->{dependents}       = {};
 
@@ -104,6 +118,11 @@ sub lookup {
         my $resp = $self->lookup_single($mname);
 
         return $resp unless $resp->is_success();
+
+        if(!$self->{core_include} and $resp->is_core()) {
+            # Mark item as taken care of, it's in the core
+            $result->{dependency_graph}->item_select($mname);
+        }
 
         my $deps = $resp->dependent_versions();
 
@@ -151,11 +170,16 @@ sub lookup_single {
 
     my $url = $self->tarball_url($mname);
 
+    LOGDIE "Couldn't get tarball for $mname from CPAN" unless defined $url;
+
         # Don't knock yourself out on modules that are part of the core
-    return CPAN::Unwind::Response->new(
-               mname              => $mname,
-               success            => 1,
-               dependent_versions => {} ) if $url =~ m#/perl-\d#;
+    if($url =~ m#/perl-\d#) {
+        return CPAN::Unwind::Response->new(
+                   mname              => $mname,
+                   success            => 1,
+                   is_core            => 1,
+                   dependent_versions => {} );
+    }
 
     return CPAN::Unwind::Response->new(
                mname              => $mname,
@@ -229,6 +253,7 @@ package CPAN::Unwind::Response;
 ###########################################
 use Algorithm::Dependency::Ordered;
 use Log::Log4perl qw(:easy);
+use Data::Dumper;
 
 ###########################################
 sub new {
@@ -236,10 +261,11 @@ sub new {
     my($class, %options) = @_;
 
     my $self = {
-        is_success   => 0,
-        mname        => "",
+        is_success         => 0,
+        is_core            => 0,
+        mname              => [],
         dependent_versions => {},
-        message      => "",
+        message            => "",
         %options,
     };
 
@@ -248,6 +274,10 @@ sub new {
 
 ###########################################
 sub is_success { $_[0]->{success} }
+###########################################
+
+###########################################
+sub is_core { $_[0]->{is_core} }
 ###########################################
 
 ###########################################
@@ -278,13 +308,16 @@ sub schedule {
 ###########################################
     my($self) = @_;
 
+    DEBUG "Dependency graph: ", Dumper($self->{dependency_graph});
+
     my $dep = Algorithm::Dependency::Ordered->new(
-        source => $self->{dependency_graph},
+        source   => $self->{dependency_graph},
+        selected => $self->{dependency_graph}->{selected},
     ) or die "Failed to set up dependency algorithm";
 
-    my $schedule = $dep->schedule($self->{mname});
+    my $schedule = $dep->schedule(@{$self->{mname}});
 
-    LOGDIE "Cannot determine schedule for $self->{mname}" unless $schedule;
+    LOGDIE "Cannot determine schedule for @{$self->{mname}}" unless $schedule;
     return @$schedule;
 }
 
@@ -321,6 +354,16 @@ sub item_add {
 }
 
 #######################################
+sub item_select {
+#######################################
+    my($self, $item) = @_;
+
+    DEBUG "Selecting $item";
+
+    push @{$self->{selected}}, $item;
+}
+
+#######################################
 sub _load_item_list {
 #######################################
     my($self) = @_;
@@ -334,6 +377,13 @@ sub _load_item_list {
 
     return \@items;
 }
+
+###########################################
+package CPAN::Unwind::Pseudocache;
+###########################################
+sub new { bless {}, shift }
+sub get { return undef; }
+sub set { }
 
 1;
 
@@ -396,7 +446,29 @@ CPAN::Unwind supports the following methods:
 
 =item C<my $agent = CPAN::Unwind-E<gt>new();>
 
-Create a new dependency agent.
+Create a new dependency agent. The following options are supported:
+
+=over 4
+
+=item C<cache>
+
+Provide your own C<Cache::Cache> object (see L<Caching>).
+
+=item C<add>
+
+Provide additional dependencies that should be part of the result:
+
+    CPAN::Unwind->new(add => 
+        ["Foo", "Bar" => 0.17,
+         ...
+        ]);
+
+indicates that C<Foo> has a dependency on C<Bar> 0.17, even if it's 
+not listed in C<Foo>'s C<Makefile.PL>. This way, you can fix broken 
+Makefile.PL files of some CPAN modules, not listing their dependencies
+correctly.
+
+=back
 
 =item C<$resp = $agent-E<gt>lookup_single($module_name)>
 

@@ -1,5 +1,5 @@
 ######################################################################
-    CPAN::Unwind 0.02
+    CPAN::Unwind 0.03
 ######################################################################
 
 NAME
@@ -52,7 +52,24 @@ DESCRIPTION
     CPAN::Unwind supports the following methods:
 
     "my $agent = CPAN::Unwind->new();"
-        Create a new dependency agent.
+        Create a new dependency agent. The following options are supported:
+
+        "cache"
+            Provide your own "Cache::Cache" object (see Caching).
+
+        "add"
+            Provide additional dependencies that should be part of the
+            result:
+
+                CPAN::Unwind->new(add => 
+                    ["Foo", "Bar" => 0.17,
+                     ...
+                    ]);
+
+            indicates that "Foo" has a dependency on "Bar" 0.17, even if
+            it's not listed in "Foo"'s "Makefile.PL". This way, you can fix
+            broken Makefile.PL files of some CPAN modules, not listing their
+            dependencies correctly.
 
     "$resp = $agent->lookup_single($module_name)"
         Goes to CPAN and fetches the tarball containing the module specified
