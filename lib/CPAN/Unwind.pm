@@ -21,7 +21,7 @@ use Cache::FileCache;
 use Cache::Cache;
 use Cwd;
 
-our $VERSION = "0.03";
+our $VERSION = "0.04";
 our $TGZ     = "tar.tgz";
 
 ###########################################
@@ -452,7 +452,7 @@ Create a new dependency agent. The following options are supported:
 
 =item C<cache>
 
-Provide your own C<Cache::Cache> object (see L<Caching>).
+Provide your own C<Cache::Cache> object (see I<Caching>).
 
 =item C<add>
 
