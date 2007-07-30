@@ -1,10 +1,11 @@
-# http://module-build.sourceforge.net/META-spec.html
-#XXXXXXX This is a prototype!!!  It will change in the future!!! XXXXX#
-name:         CPAN-Unwind
-version:      0.04
-version_from: lib/CPAN/Unwind.pm
-installdirs:  site
-requires:
+--- #YAML:1.0
+name:                CPAN-Unwind
+version:             0.05
+abstract:            Recursively determines dependencies of CPAN modules
+license:             ~
+generated_by:        ExtUtils::MakeMaker version 6.31
+distribution_type:   module
+requires:     
     Algorithm::Dependency::Ordered: 0
     Archive::Tar:                  0
     Cache::Cache:                  0
@@ -17,6 +18,8 @@ requires:
     Module::Depends::Intrusive:    0
     Pod::Usage:                    0
     Storable:                      0
-
-distribution_type: module
-generated_by: ExtUtils::MakeMaker version 6.30
+meta-spec:
+    url:     http://module-build.sourceforge.net/META-spec-v1.2.html
+    version: 1.2
+author:
+    - Mike Schilli <cpan@perlmeister.com>
