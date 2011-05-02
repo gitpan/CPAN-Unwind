@@ -13,7 +13,7 @@ use File::Temp qw(tempfile tempdir);
 use Log::Log4perl qw(:easy);
 use Log::Log4perl::Util;
 use Data::Dumper;
-use LWP::Simple qw();
+use LWP::UserAgent;
 use Module::Depends::Intrusive;
 use Archive::Tar;
 use Storable qw(freeze thaw);
@@ -21,7 +21,7 @@ use Cache::FileCache;
 use Cache::Cache;
 use Cwd;
 
-our $VERSION = "0.05";
+our $VERSION = "0.06";
 our $TGZ     = "tar.tgz";
 
   # These troublemakers are ignored when listed as a dependency
@@ -194,12 +194,20 @@ sub lookup_single {
 
     DEBUG "Created tempdir $tempdir";
 
-    my $rc = LWP::Simple::getstore($url, "$tempdir/$TGZ");
+    my $ua = LWP::UserAgent->new();
+    my $resp = $ua->get("$url");
 
-    return CPAN::Unwind::Response->new(
-               mname   => $mname,
-               message => "Fetching tarball $url failed") unless $rc;
-    
+    if($resp->is_error()) {
+        return CPAN::Unwind::Response->new(
+                   mname   => $mname,
+                   message => "Fetching tarball $url failed");
+    }
+
+    my $tgzfile = "$tempdir/$TGZ";
+    open FILE, ">$tgzfile" or LOGDIE "Can't open $tgzfile ($!)";
+    print FILE $resp->content();
+    close FILE;
+
     my $cwd = getcwd();
     chdir $tempdir or LOGDIE "Cannot chdir to $tempdir";
 
@@ -441,7 +449,7 @@ runs L<Module::Depends::Intrusive> on them.
 SECURITY NOTE: L<CPAN::Unwind> runs all Makefile.PL files (via
 C<Module::Depends::Intrusive>) of modules it finds dependencies on. If
 you are concerned that any module in the dependency tree on CPAN isn't
-trustworthy, don't use it.
+trustworthy, only use it in a secured sandbox.
 
 =head2 METHODS
 
@@ -569,7 +577,7 @@ C<CPAN::Unwind> requires a valid CPAN configuration.
 
 =head1 LEGALESE
 
-Copyright 2005 by Mike Schilli, all rights reserved.
+Copyright 2005-2011 by Mike Schilli, all rights reserved.
 This program is free software, you can redistribute it and/or
 modify it under the same terms as Perl itself.
 
